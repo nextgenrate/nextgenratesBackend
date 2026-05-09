@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,          // smtppro.zoho.in
   port: parseInt(process.env.SMTP_PORT || '465'),
-  secure: true,                          // ← true for port 465 SSL
+  secure: false,                          // ← true for port 465 SSL
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
