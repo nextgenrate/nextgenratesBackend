@@ -1,67 +1,62 @@
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const axios = require('axios');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,          // smtppro.zoho.in
-  port: parseInt(process.env.SMTP_PORT || '465'),
-  secure: false,                          // ← true for port 465 SSL
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
-  pool: true,
-  maxConnections: 5,
-});
+async function getAccessToken() {
+  const res = await axios.post(
+    'https://accounts.zoho.in/oauth/v2/token',
+    null,
+    {
+      params: {
+        refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+        client_id: process.env.ZOHO_CLIENT_ID,
+        client_secret: process.env.ZOHO_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+      },
+    }
+  );
+
+  return res.data.access_token;
+}
 
 const NG = { navy: '#0D1B5E', blue: '#1A3CC8', accent: '#00C2FF', white: '#FFFFFF' };
-
-const base = (content) => `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body{margin:0;padding:0;background:#EEF3FF;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-  .wrap{max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(13,27,94,.12)}
-  .hd{background:linear-gradient(135deg,${NG.navy},#162299);padding:28px 32px;text-align:center}
-  .hd-logo{font-size:22px;font-weight:900;color:#fff;letter-spacing:-.3px}
-  .hd-logo span{color:${NG.accent}}
-  .hd-sub{font-size:12px;color:rgba(255,255,255,.5);margin-top:4px}
-  .bd{padding:32px}
-  .otp-box{font-size:40px;font-weight:900;letter-spacing:10px;color:${NG.navy};padding:22px;text-align:center;background:#EEF3FF;border-radius:12px;border:2px dashed ${NG.blue};margin:22px 0;font-family:ui-monospace,monospace}
-  .info-row{display:flex;padding:9px 0;border-bottom:1px solid #F1F5F9;font-size:13px}
-  .info-label{color:#7B8EC0;width:180px;flex-shrink:0;font-weight:600}
-  .info-val{color:#0D1535;font-weight:700}
-  .btn{display:inline-block;padding:13px 28px;background:linear-gradient(135deg,${NG.blue},#1E50FF);color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:800;margin:20px 0;box-shadow:0 4px 14px rgba(26,60,200,.35)}
-  .step-row{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px}
-  .step-num{width:22px;height:22px;border-radius:50%;background:#FEF08A;border:1px solid #FDE68A;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#92400E;flex-shrink:0}
-  .ft{background:#F0F4FF;padding:18px 32px;text-align:center;font-size:12px;color:#7B8EC0}
-</style></head><body>
-<div class="wrap">
-  <div class="hd">
-    <div class="hd-logo">NEXT GEN <span>RATES</span></div>
-    <div class="hd-sub">Instant Freight Rates Re-Imagined!</div>
-  </div>
-  <div class="bd">${content}</div>
-  <div class="ft">© ${new Date().getFullYear()} Next Gen Rates. All rights reserved.<br>This is an automated email — please do not reply.</div>
-</div></body></html>`;
-
+const base = (content) => `
+<div style="font-family:sans-serif;max-width:600px;margin:auto">
+  ${content}
+</div>
+`;
 const send = async ({ to, subject, html }) => {
   try {
-    await transporter.sendMail({
-      from: `"Next Gen Rates" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-      to, subject, html,
-    });
-    logger.info(`Email → ${to}: ${subject}`);
+    const token = await getAccessToken();
+
+    // Use mail.zoho.in for Indian accounts
+    const url = `https://mail.zoho.in/api/accounts/${process.env.ZOHO_ACCOUNT_ID}/messages`;
+
+    const res = await axios.post(url,
+      {
+        fromAddress: process.env.ZOHO_FROM,
+        toAddress: to,
+        subject: subject,
+        content: html,
+        mailFormat: "html",   // ← correct key is mailFormat, not contentType
+      },
+      {
+        headers: {
+          Authorization: `Zoho-oauthtoken ${token}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",   // ← was missing
+        },
+      }
+    );
+
+    console.log("Zoho success:", res.data);
+    return res.data;
+
   } catch (err) {
-    logger.error(`Email failed → ${to}: ${err.message}`);
+    console.error("Zoho FULL ERROR:", err.response?.data || err.message);
     throw err;
   }
 };
-
 const emailService = {
 
   /* OTP for registration / password reset */
