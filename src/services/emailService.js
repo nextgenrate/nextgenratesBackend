@@ -2,16 +2,19 @@ const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false, // IMPORTANT for 587
+  host: process.env.SMTP_HOST,          // smtppro.zoho.in
+  port: parseInt(process.env.SMTP_PORT || '465'),
+  secure: true,                          // ← true for port 465 SSL
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
   tls: {
-    rejectUnauthorized: false, // 🔥 FIX
+    rejectUnauthorized: false,
   },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
   pool: true,
   maxConnections: 5,
 });
@@ -49,7 +52,7 @@ const base = (content) => `<!DOCTYPE html><html><head><meta charset="utf-8">
 const send = async ({ to, subject, html }) => {
   try {
     await transporter.sendMail({
-      from: `"Next Gen Rates" <${process.env.SMTP_USER}>`,
+      from: `"Next Gen Rates" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
       to, subject, html,
     });
     logger.info(`Email → ${to}: ${subject}`);
