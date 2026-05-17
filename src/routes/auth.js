@@ -27,21 +27,39 @@ const upload = multer({
     cb(ok ? null : new Error('Only PDF, JPG, PNG allowed'), ok);
   },
 });
-/* Registration company docs (document_0 … document_4) */
+
+/* ─────────────────────────────────────────────────────────────────
+   docFields — ALL possible file field names the frontend may send.
+   Keep in sync with KYC_CONFIGS document keys in RegisterPage.jsx.
+   FIX: added 'govt_id' (used for India IN + DEFAULT country configs)
+───────────────────────────────────────────────────────────────── */
 const docFields = [
+  /* Company registration docs (document_0 … document_4) */
   ...Array.from({ length: 5 }, (_, i) => ({ name: `document_${i}`, maxCount: 1 })),
-  /* KYC identity docs — all possible field keys from KYC_CONFIGS in RegisterPage */
-  { name: 'aadhaar',       maxCount: 1 },
-  { name: 'pan',           maxCount: 1 },
-  { name: 'gst',           maxCount: 1 },
-  { name: 'national_id',   maxCount: 1 },
-  { name: 'trade_license', maxCount: 1 },
-  { name: 'business_reg',  maxCount: 1 },
-  { name: 'address_proof', maxCount: 1 },
-  { name: 'other',         maxCount: 1 },
-  { name: 'vat_cert',      maxCount: 1 },
+  /* KYC identity doc keys — must match every `key` in KYC_CONFIGS.documents */
+  { name: 'govt_id',      maxCount: 1 },   // ← ADDED: India + DEFAULT config
+  { name: 'aadhaar',      maxCount: 1 },
+  { name: 'pan',          maxCount: 1 },
+  { name: 'gst',          maxCount: 1 },
+  { name: 'national_id',  maxCount: 1 },
+  { name: 'trade_license',maxCount: 1 },
+  { name: 'business_reg', maxCount: 1 },
+  { name: 'address_proof',maxCount: 1 },
+  { name: 'other',        maxCount: 1 },
+  { name: 'vat_cert',     maxCount: 1 },
   { name: 'incorporation', maxCount: 1 },
 ];
+
+/* ──────────────────────────────────────────────────────────────
+   KYC_DOC_KEYS — mirror of docFields KYC entries (used during
+   S3 upload loop to separate kyc docs from company reg docs).
+   FIX: added 'govt_id' here too.
+────────────────────────────────────────────────────────────── */
+const KYC_DOC_KEYS = new Set([
+  'govt_id',        // ← ADDED
+  'aadhaar','pan','gst','national_id','trade_license',
+  'business_reg','address_proof','other','vat_cert','incorporation',
+]);
 
 /* ══════════════════════════════════════════════════════════════
    COMPANY REGISTRATION  (3-step: send OTP → verify OTP → submit)
@@ -58,6 +76,12 @@ router.post('/registration/send-otp', async (req, res) => {
     if (isBlocked(value)) return res.status(400).json({ success: false, message: 'Personal email providers (Gmail, Yahoo etc.) are not accepted. Please use your official company email.' });
     const existing = await User.findOne({ officialEmail: value.toLowerCase().trim() }).lean();
     if (existing) return res.status(409).json({ success: false, message: 'This email is already registered. Please sign in.' });
+  }
+
+  if (type === 'mobile') {
+    /* ── NEW: check if mobile is already registered ── */
+    const existingMobile = await User.findOne({ mobile: value.trim() }).lean();
+    if (existingMobile) return res.status(409).json({ success: false, message: 'This mobile number is already registered. Please sign in.' });
   }
 
   const otp = generateOtp();
@@ -85,8 +109,8 @@ router.post('/registration/verify-otp', async (req, res) => {
 
   const key    = `reg_otp:${type}:${value}`;
   const stored = await cache.get(key);
-  if (!stored)              return res.status(400).json({ success: false, message: 'OTP has expired. Please request a new OTP.' });
-  if (stored !== String(otp).trim()) return res.status(400).json({ success: false, message: 'Incorrect OTP. Please check and try again.' });
+  if (!stored)                          return res.status(400).json({ success: false, message: 'OTP has expired. Please request a new OTP.' });
+  if (stored !== String(otp).trim())    return res.status(400).json({ success: false, message: 'Incorrect OTP. Please check and try again.' });
 
   /* Store verified flag for 30 min so user can complete the form */
   await cache.set(`reg_verified:${type}:${value}`, '1', 1800);
@@ -94,8 +118,32 @@ router.post('/registration/verify-otp', async (req, res) => {
   res.json({ success: true, message: `${type === 'email' ? 'Email' : 'Mobile'} verified successfully.` });
 });
 
-/* STEP 3 — Full registration submission (multipart with up to 5 docs + password) */
-router.post('/registration/submit', upload.fields(docFields), async (req, res) => {
+/* ─────────────────────────────────────────────────────────────────
+   STEP 3 — Full registration submission (multipart/form-data)
+   multerErrorHandler catches "Unexpected field" and returns a clear
+   400 instead of crashing with a generic 500.
+───────────────────────────────────────────────────────────────── */
+const multerUpload = upload.fields(docFields);
+
+const multerErrorHandler = (req, res, next) => {
+  multerUpload(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({
+          success: false,
+          message: `Unexpected file field: "${err.field}". Please contact support if this persists.`,
+        });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, message: 'File too large. Maximum allowed size is 10 MB per file.' });
+      }
+      return res.status(400).json({ success: false, message: err.message || 'File upload error' });
+    }
+    next();
+  });
+};
+
+router.post('/registration/submit', multerErrorHandler, async (req, res) => {
   const b = req.body;
 
   /* ── required field check ── */
@@ -126,17 +174,12 @@ router.post('/registration/submit', upload.fields(docFields), async (req, res) =
 
   /* ── Upload documents to S3 ── */
   const registrationDocuments = [];  // company reg docs (document_0…4)
-  const kycDocuments          = [];  // KYC identity docs (aadhaar, pan, etc.)
-
-  const KYC_DOC_KEYS = new Set([
-    'aadhaar','pan','gst','national_id','trade_license',
-    'business_reg','address_proof','other','vat_cert','incorporation',
-  ]);
+  const kycDocuments          = [];  // KYC identity docs (govt_id, pan, etc.)
 
   for (const [key, fileArr] of Object.entries(req.files || {})) {
-    const file = fileArr[0];
+    const file     = fileArr[0];
     const isKycDoc = KYC_DOC_KEYS.has(key);
-    const folder   = isKycDoc ? `kyc/registration` : 'registrations';
+    const folder   = isKycDoc ? 'kyc/registration' : 'registrations';
     try {
       const result = await uploadToS3(file, folder);
       const entry = {
@@ -149,16 +192,13 @@ router.post('/registration/submit', upload.fields(docFields), async (req, res) =
         uploadedAt:        new Date(),
       };
       if (isKycDoc) {
-  kycDocuments.push({ ...entry, type: key });
-} else {
-  registrationDocuments.push({
-    ...entry,
-    type: key || 'company_document', // ✅ FIX
-  });
-}
+        kycDocuments.push({ ...entry, type: key });
+      } else {
+        registrationDocuments.push({ ...entry, type: key || 'company_document' });
+      }
     } catch (s3Err) {
       console.error(`S3 upload error [${key}]:`, s3Err.message);
-      // Non-fatal — continue
+      // Non-fatal — continue (doc stored without S3 URL)
     }
   }
 
@@ -202,12 +242,12 @@ router.post('/registration/submit', upload.fields(docFields), async (req, res) =
       status:        'pending',
       submittedAt:   new Date(),
       country:       b.kycCountry    || '',
-      gstNumber:     b.kycGstNumber  || '',
       panNumber:     b.panNumber     || '',
       aadhaarNumber: b.aadhaarNumber || '',
       nationalId:    b.nationalId    || '',
       taxId:         b.taxId         || '',
-      documents:     kycDocuments,   // KYC files uploaded in registration step 3
+      documents:     kycDocuments,
+      // Note: kycGstNumber removed — GST entry is via vatGstTaxNo in Step 1 only
     },
   });
 
