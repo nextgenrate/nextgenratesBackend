@@ -721,6 +721,115 @@ router.patch('/registrations/:userId/reset-kyc', requireSuperAdmin, async (req, 
   res.json({ success: true, message: `KYC reset to not_submitted for ${user.name}. User will be prompted to upload KYC on next login.` });
 });
 
+// ─── Add these routes to routes/admin.js ───────────────────────────────────
+// They complement the existing  POST /admin/ports  and  PUT /admin/ports/:id
+// routes already in your admin.js — add the missing GET and DELETE below.
+
+// GET /api/admin/ports  — list with pagination, type filter, search
+router.get('/ports', async (req, res) => {
+  const { type, search, page = 1, limit = 20 } = req.query;
+  const query = {};
+  if (type)   query.type = type;
+  if (search) {
+    const re = new RegExp(search, 'i');
+    query.$or = [{ code: re }, { name: re }, { country: re }];
+  }
+
+  const [ports, total] = await Promise.all([
+    Port.find(query)
+      .sort({ type: 1, region: 1, name: 1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean(),
+    Port.countDocuments(query),
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      ports,
+      pagination: { total, page: parseInt(page), pages: Math.ceil(total / limit) },
+    },
+  });
+});
+
+// POST /api/admin/ports  — already exists in your admin.js, but if it uses upsert:
+// Replace the existing one with this version that handles duplicates gracefully:
+router.post('/ports', async (req, res) => {
+  const { code, ...rest } = req.body;
+  if (!code) return res.status(400).json({ success: false, message: 'Port code is required' });
+
+  try {
+    const port = await Port.findOneAndUpdate(
+      { code: code.toUpperCase().trim() },
+      { code: code.toUpperCase().trim(), ...rest },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await cache.delPattern('ports:*'); // clear port cache
+    res.status(201).json({ success: true, data: port });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ success: false, message: `Port ${code} already exists` });
+    }
+    throw err;
+  }
+});
+
+// PUT /api/admin/ports/:id  — already exists, but add cache invalidation:
+router.put('/ports/:id', async (req, res) => {
+  const port = await Port.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  if (!port) return res.status(404).json({ success: false, message: 'Port not found' });
+  await cache.delPattern('ports:*'); // clear port cache so dropdown refreshes
+  res.json({ success: true, data: port });
+});
+
+// DELETE /api/admin/ports/:id  — soft delete (set isActive: false)
+router.delete('/ports/:id', async (req, res) => {
+  const port = await Port.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+  if (!port) return res.status(404).json({ success: false, message: 'Port not found' });
+  await cache.delPattern('ports:*');
+  res.json({ success: true, message: `Port ${port.code} deactivated` });
+});
+
+
+
+router.get('/shipping-lines', adminProtect, async (req, res) => { 
+  try {
+    // Pull distinct carriers from existing rates
+    const fromRates = await Rate.aggregate([
+      { $match: { shippingLine: { $exists: true, $ne: '' } } },
+      { $group: { _id: '$shippingLine', code: { $first: '$shippingLineCode' } } },
+      { $sort: { _id: 1 } },
+      { $project: { _id: 0, name: '$_id', code: 1 } },
+    ]);
+
+    // Always include standard lines even if not yet in rates
+    const STANDARD = [
+      { name:'Maersk',      code:'MAEU' }, { name:'Hapag-Lloyd', code:'HLCU' },
+      { name:'MSC',         code:'MSCU' }, { name:'CMA CGM',     code:'CMDU' },
+      { name:'COSCO',       code:'COSU' }, { name:'Evergreen',   code:'EGLV' },
+      { name:'ONE',         code:'ONEY' }, { name:'Yang Ming',   code:'YMLU' },
+      { name:'ZIM',         code:'ZIMU' }, { name:'PIL',         code:'PILU' },
+      { name:'OOCL',        code:'OOLU' }, { name:'Wan Hai',     code:'WHLC' },
+      { name:'HMM',         code:'HDMU' }, { name:'Arkas',       code:'ARKU' },
+      { name:'Samudera',    code:'SMDR' }, { name:'SITC',        code:'SITC' },
+      { name:'Emirates',    code:'ESPU' }, { name:'Regional',    code:'RITS' },
+      { name:'Unifeeder',   code:'UFFE' }, { name:'X-Press',     code:'XPRS' },
+    ];
+
+    // Merge: db lines take priority, then fill in any standard lines not already there
+    const merged = [...fromRates];
+    for (const sl of STANDARD) {
+      if (!merged.find(m => m.name === sl.name)) merged.push(sl);
+    }
+    merged.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ success: true, data: merged });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Admin management (super admin only)
 router.post('/admins', requireSuperAdmin, async (req, res) => {
   const { name, email, role = 'admin' } = req.body;
