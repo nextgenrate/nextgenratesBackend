@@ -249,3 +249,65 @@ emailService.sendKycAdminAlert = async (to, user) => {
     `),
   });
 };
+emailService.sendBookingStatusUpdate = async (to, name, booking) => {
+  if (!to) return;
+
+  const statusConfig = {
+    approved:     { label: 'Approved ✅',     color: '#0A8A56', bg: '#EDFBF4', border: '#6EE7B7', msg: 'Your booking has been approved and is being processed.' },
+    confirmed:    { label: 'Confirmed 🎉',    color: '#1A3CC8', bg: '#EEF3FF', border: '#93C5FD', msg: 'Your booking is confirmed. Our team will be in touch with shipment details shortly.' },
+    rejected:     { label: 'Rejected ❌',     color: '#D91A1A', bg: '#FFF1F0', border: '#FFCCC7', msg: 'Unfortunately your booking could not be approved at this time.' },
+    cancelled:    { label: 'Cancelled',       color: '#92400E', bg: '#FFF8E6', border: '#FDE68A', msg: 'Your booking has been cancelled.' },
+    under_review: { label: 'Under Review 🔍', color: '#C47B00', bg: '#FFF8E6', border: '#FDE68A', msg: 'Your booking is currently under review. We will update you shortly.' },
+  };
+
+  const cfg = statusConfig[booking.status] || { label: booking.status, color: '#3A4A7A', bg: '#EEF3FF', border: '#D4DCFF', msg: 'Your booking status has been updated.' };
+
+  await send({
+    to,
+    subject: `Booking ${cfg.label} — ${booking.bookingRef}`,
+    html: base(`
+      <h2 style="color:#0D1535;font-size:20px;font-weight:900;margin:0 0 12px">Booking Status Update</h2>
+      <p style="color:#3A4A7A;line-height:1.7">Hi <strong>${name || 'Customer'}</strong>,</p>
+      <div style="padding:14px 18px;background:${cfg.bg};border:1px solid ${cfg.border};border-radius:12px;margin:16px 0;text-align:center">
+        <div style="font-size:11px;font-weight:700;color:${cfg.color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Status</div>
+        <div style="font-size:22px;font-weight:900;color:${cfg.color}">${cfg.label}</div>
+      </div>
+      <p style="color:#3A4A7A;line-height:1.7">${cfg.msg}</p>
+      <div style="background:#EEF3FF;border-radius:10px;padding:14px 18px;margin:16px 0">
+        <div style="display:flex;padding:6px 0;border-bottom:1px solid #D4DCFF;font-size:13px"><span style="width:140px;color:#7B8EC0;font-weight:600;flex-shrink:0">Booking Ref</span><strong style="color:#1A3CC8;font-family:ui-monospace">${booking.bookingRef}</strong></div>
+        <div style="display:flex;padding:6px 0;border-bottom:1px solid #D4DCFF;font-size:13px"><span style="width:140px;color:#7B8EC0;font-weight:600;flex-shrink:0">Route</span><strong style="color:#0D1535">${booking.originPort} → ${booking.destinationPort}</strong></div>
+        <div style="display:flex;padding:6px 0;border-bottom:1px solid #D4DCFF;font-size:13px"><span style="width:140px;color:#7B8EC0;font-weight:600;flex-shrink:0">Mode</span><strong style="color:#0D1535">${booking.mode}</strong></div>
+        <div style="display:flex;padding:6px 0;font-size:13px;border:none"><span style="width:140px;color:#7B8EC0;font-weight:600;flex-shrink:0">Carrier</span><strong style="color:#0D1535">${booking.carrier || '—'}</strong></div>
+      </div>
+      ${booking.adminNotes ? `
+      <div style="padding:12px 16px;background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;margin:14px 0">
+        <div style="font-size:11px;font-weight:700;color:#C47B00;margin-bottom:5px">NOTE FROM OUR TEAM</div>
+        <div style="font-size:13px;color:#78350F;line-height:1.6">${booking.adminNotes}</div>
+      </div>` : ''}
+      <p style="color:#7B8EC0;font-size:13px;margin-top:20px">Questions? Reply to this email or contact <a href="mailto:${process.env.ADMIN_EMAIL || 'support@nextgenrates.com'}" style="color:#1A3CC8">${process.env.ADMIN_EMAIL || 'support@nextgenrates.com'}</a></p>
+    `),
+  });
+};
+
+// Admin-created account — sends temp credentials to user
+emailService.sendAdminCreatedAccount = async (to, name, email, tempPassword, loginUrl) => {
+  await send({
+    to,
+    subject: `Your Next Gen Rates Account Has Been Created`,
+    html: base(`
+      <h2 style="color:#0D1535;font-size:20px;font-weight:900;margin:0 0 12px">Account Created for You</h2>
+      <p style="color:#3A4A7A;line-height:1.7">Hi <strong>${name}</strong>,<br><br>
+      An account has been created for you on the Next Gen Rates platform. Please sign in with the credentials below and change your password immediately.</p>
+      <div style="background:#EEF3FF;border-radius:12px;padding:18px 22px;margin:20px 0">
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px"><span style="width:120px;color:#7B8EC0;font-weight:600;flex-shrink:0">Email</span><strong style="color:#0D1535;font-family:ui-monospace">${email}</strong></div>
+        <div style="display:flex;padding:7px 0;font-size:13px;border:none"><span style="width:120px;color:#7B8EC0;font-weight:600;flex-shrink:0">Password</span><strong style="color:#1A3CC8;font-family:ui-monospace;font-size:16px">${tempPassword}</strong></div>
+      </div>
+      <div style="padding:12px 16px;background:#FFF1F0;border:1px solid #FFCCC7;border-radius:10px;margin:14px 0;font-size:13px;color:#7F1D1D">
+        ⚠️ Please change your password immediately after logging in.
+      </div>
+      <div style="text-align:center;margin:20px 0">
+        <a href="${loginUrl}/login" style="display:inline-block;padding:13px 28px;background:linear-gradient(135deg,#1A3CC8,#1E50FF);color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:800;box-shadow:0 4px 14px rgba(26,60,200,.35)">Sign In Now →</a>
+      </div>
+    `),
+  });
+};
