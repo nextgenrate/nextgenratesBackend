@@ -118,21 +118,32 @@ router.post('/search', protect, requireKyc, async (req, res) => {
 
   const orig = originPort.toUpperCase();
   const dest = destinationPort.toUpperCase();
-  const cacheKey = `rates:${mode}:${orig}:${dest}:${containerType || 'all'}`;
+
+  // FIX: don't include containerType in cache key — fetch all containers, filter in memory
+  const cacheKey = `rates:${mode}:${orig}:${dest}`;
   let rates = await cache.get(cacheKey);
 
   if (!rates) {
     const query = {
-      mode, originPort: orig, destinationPort: dest, isActive: true,
-      validFrom: { $lte: new Date() },
+      mode,
+      originPort: orig,
+      destinationPort: dest,
+      isActive: true,
+      // FIX: removed validFrom filter — validFrom means "rate available from this date",
+      // not "rate must have been created in the past"
       $or: [{ validTo: null }, { validTo: { $gte: new Date() } }],
     };
-    if (containerType) query.containerType = containerType;
+    // FIX: do NOT filter by containerType in DB query — fetch all, filter in memory
+    // This way the cache covers all containers for a route
     rates = await Rate.find(query).lean();
     await cache.set(cacheKey, rates, 300);
   }
 
   let filtered = [...rates];
+
+  // FIX: containerType filter moved to in-memory so it works with the broader cache
+  if (containerType) filtered = filtered.filter(r => !r.containerType || r.containerType === containerType);
+  
   if (filterCarrier) filtered = filtered.filter(r => r.shippingLine?.toLowerCase().includes(filterCarrier.toLowerCase()));
   if (filterDirect === 'direct')   filtered = filtered.filter(r => !r.viaPort?.length);
   if (filterDirect === 'indirect') filtered = filtered.filter(r =>  r.viaPort?.length > 0);
