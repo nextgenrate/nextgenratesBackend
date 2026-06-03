@@ -311,3 +311,58 @@ emailService.sendAdminCreatedAccount = async (to, name, email, tempPassword, log
     `),
   });
 };
+
+emailService.sendBookingAdminAlert = async (to, booking, user) => {
+  if (!to) return;
+  await send({
+    to,
+    subject: `📦 New Booking Request — ${booking.bookingRef}`,
+    html: base(`
+      <h2 style="color:#0D1535;font-size:18px;font-weight:900;margin:0 0 16px">New Booking Request</h2>
+      <div style="background:#EEF3FF;border-radius:10px;padding:16px 18px;margin-bottom:18px">
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Booking Ref</span>
+          <strong style="color:#1A3CC8;font-family:ui-monospace">${booking.bookingRef}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Customer</span>
+          <strong style="color:#0D1535">${user?.name || '—'}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Email</span>
+          <strong style="color:#0D1535">${user?.officialEmail || user?.email || '—'}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Company</span>
+          <strong style="color:#0D1535">${user?.company?.name || '—'}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Route</span>
+          <strong style="color:#0D1535">${booking.originPort} → ${booking.destinationPort}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Mode</span>
+          <strong style="color:#0D1535">${booking.mode}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Container</span>
+          <strong style="color:#0D1535">${booking.containerType || '—'}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;border-bottom:1px solid #D4DCFF;font-size:13px">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Carrier</span>
+          <strong style="color:#0D1535">${booking.carrier || '—'}</strong>
+        </div>
+        <div style="display:flex;padding:7px 0;font-size:13px;border:none">
+          <span style="width:150px;color:#7B8EC0;font-weight:600;flex-shrink:0">Total Amount</span>
+          <strong style="color:#0D1535">${booking.currency || 'USD'} ${booking.totalAmount?.toLocaleString() || '—'}</strong>
+        </div>
+      </div>
+      <div style="text-align:center">
+        <a href="${process.env.ADMIN_URL || 'http://localhost:3001'}/bookings"
+          style="display:inline-block;padding:13px 28px;background:linear-gradient(135deg,#1A3CC8,#1E50FF);color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:800;box-shadow:0 4px 14px rgba(26,60,200,.35)">
+          Review Booking →
+        </a>
+      </div>
+    `),
+  });
+};
