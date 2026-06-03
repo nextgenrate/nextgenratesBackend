@@ -10,42 +10,59 @@ const emailService = require('../services/emailService');
 
 // ─── Create booking request ───────────────────────────────────
 router.post('/', protect, requireKyc, async (req, res) => {
-  const {
-    rateId, mode, originPort, destinationPort, carrier, containerType,
-    containers, cargoType, commodity, hsCode, incoterms, sailingDate,
-    totalAmount, currency, pickupAddress, deliveryAddress, customerNotes,
-  } = req.body;
+  try {
+    const {
+      rateId, mode, originPort, destinationPort, carrier, containerType,
+      containers, cargoType, commodity, hsCode, incoterms, sailingDate,
+      totalAmount, currency, pickupAddress, deliveryAddress, customerNotes,
+    } = req.body;
 
-  if (!originPort || !destinationPort || !mode) {
-    return res.status(400).json({ success: false, message: 'originPort, destinationPort, and mode are required' });
+    if (!originPort || !destinationPort || !mode) {
+      return res.status(400).json({ success: false, message: 'originPort, destinationPort, and mode are required' });
+    }
+
+    const booking = await Booking.create({
+      user: req.user._id,
+      rate: rateId || undefined,
+      mode, originPort, destinationPort, carrier, containerType,
+      containers, cargoType, commodity, hsCode, incoterms,
+      sailingDate: sailingDate ? new Date(sailingDate) : undefined,
+      totalAmount, currency,
+      pickupAddress, deliveryAddress,
+      customerNotes,
+    });
+
+    // Notify admins — fully guarded, never blocks booking creation
+    const admins = await Admin.find({ isActive: true, role: { $in: ['admin', 'super_admin'] } })
+      .select('email').limit(3).lean();
+    for (const admin of admins) {
+      await emailService.sendBookingAdminAlert(admin.email, booking, req.user).catch(() => {});
+    }
+
+    await emailService.sendBookingConfirmation(
+  req.user?.officialEmail || req.user?.email,
+  req.user?.name,
+  booking
+).catch(() => {});
+
+    await ActivityLog.create({
+      actor: req.user._id, actorModel: 'User',
+      action: 'booking_created', resource: 'Booking', resourceId: booking._id,
+    }).catch(() => {});
+
+    res.status(201).json({
+      success: true,
+      message: 'Booking request submitted successfully. You will receive a confirmation within 24 hours.',
+      booking: { _id: booking._id, bookingRef: booking.bookingRef, status: booking.status },
+    });
+
+  } catch (err) {
+    console.error('POST /bookings error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
-
-  const booking = await Booking.create({
-    user: req.user._id,
-    rate: rateId,
-    mode, originPort, destinationPort, carrier, containerType,
-    containers, cargoType, commodity, hsCode, incoterms,
-    sailingDate: sailingDate ? new Date(sailingDate) : undefined,
-    totalAmount, currency,
-    pickupAddress, deliveryAddress,
-    customerNotes,
-  });
-
-  // Notify admin(s)
-  const admins = await Admin.find({ isActive: true, role: { $in: ['admin', 'super_admin'] } }).select('email').limit(3);
-  for (const admin of admins) {
-    await emailService.sendBookingAdminAlert(admin.email, booking, req.user).catch(() => {});
-  }
-
-  // Log activity
-  await ActivityLog.create({ actor: req.user._id, actorModel: 'User', action: 'booking_created', resource: 'Booking', resourceId: booking._id });
-
-  res.status(201).json({
-    success: true,
-    message: 'Booking request submitted successfully. You will receive a confirmation within 24 hours.',
-    booking: { _id: booking._id, bookingRef: booking.bookingRef, status: booking.status },
-  });
 });
+
+
 
 // ─── Get user's bookings ──────────────────────────────────────
 router.get('/', protect, async (req, res) => {
