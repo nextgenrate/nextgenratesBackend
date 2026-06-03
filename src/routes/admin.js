@@ -541,26 +541,40 @@ router.get('/bookings', async (req, res) => {
 });
 
 router.patch('/bookings/:id', async (req, res) => {
-  const { status, adminNotes } = req.body;
-  if (!['approved', 'rejected', 'confirmed', 'cancelled', 'under_review'].includes(status)) {
-    return res.status(400).json({ success: false, message: 'Invalid status' });
+  try {
+    const { status, adminNotes } = req.body;
+    if (!['approved', 'rejected', 'confirmed', 'cancelled', 'under_review'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const booking = await Booking.findByIdAndUpdate(req.params.id, {
+      status, adminNotes, reviewedBy: req.admin._id, reviewedAt: new Date(),
+      ...(status === 'confirmed' ? { confirmedAt: new Date() } : {}),
+    }, { new: true }).populate('user', 'name email');
+
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    await emailService.sendBookingStatusUpdate(
+      booking.user?.officialEmail || booking.user?.email,
+      booking.user?.name,
+      booking
+    ).catch(e => console.error('Email failed:', e));  // already safe
+
+    await ActivityLog.create({
+      actor: req.admin._id,
+      actorModel: 'Admin',
+      action: `booking_${status}`,
+      resource: 'Booking',
+      resourceId: booking._id,
+    }).catch(e => console.error('ActivityLog failed:', e));  // FIX: add .catch()
+
+    res.json({ success: true, data: booking });
+
+  } catch (err) {
+    console.error('PATCH /bookings/:id error:', err);
+    res.status(500).json({ success: false, message: err.message });  // real error now visible
   }
-
-  const booking = await Booking.findByIdAndUpdate(req.params.id, {
-    status, adminNotes, reviewedBy: req.admin._id, reviewedAt: new Date(),
-    ...(status === 'confirmed' ? { confirmedAt: new Date() } : {}),
-  }, { new: true }).populate('user', 'name email');
-
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-
-  // Notify user
-  await emailService.sendBookingStatusUpdate(booking.user?.officialEmail || booking.user?.email, booking.user?.name, booking).catch(() => {});
-
-  await ActivityLog.create({ actor: req.admin._id, actorModel: 'Admin', action: `booking_${status}`, resource: 'Booking', resourceId: booking._id });
-
-  res.json({ success: true, data: booking });
 });
-
 // ─── Enquiry management ───────────────────────────────────────
 router.get('/enquiries', async (req, res) => {
   const { status, page = 1, limit = 20 } = req.query;
