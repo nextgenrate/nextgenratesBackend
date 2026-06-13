@@ -161,6 +161,56 @@ userSchema.methods.isLocked = function() {
 const User = mongoose.model('User', userSchema);
 
 /* ══════════════════════════════════════════════════════════════
+   AIR RATE  (slab-based pricing)
+══════════════════════════════════════════════════════════════ */
+const airRateSchema = new mongoose.Schema({
+  originPort:        { type:String, required:true, uppercase:true },  // IATA airport code
+  destinationPort:   { type:String, required:true, uppercase:true },
+  carrier:           { type:String, default:'All Airlines' },
+  cargoType:         { type:String, default:'FAK' },    // FAK / HAZ / PHAR / COOL
+  vwDivisor:         { type:Number, default:6000 },     // IATA=6000, some use 5000
+  transitTime:       String,
+  validFrom:         { type:Date, required:true },
+  validTo:           Date,
+  isActive:          { type:Boolean, default:true },
+  createdBy:         { type:mongoose.Schema.Types.ObjectId, ref:'Admin' },
+  // Rate slabs — one doc can have multiple slabs for same route
+  slabs: [{
+    minCW:      { type:Number, required:true },   // exclusive (>)
+    maxCW:      { type:Number, required:true },   // inclusive (≤)
+    slabName:   String,
+    ratePerKg:  { type:Number, required:true },   // USD/KG
+    currency:   { type:String, default:'USD' },
+    minCharge:  { type:Number, default:0 },       // USD minimum
+    remarks:    String,
+  }],
+  // Origin charges (FSC, SSC, AWB etc.)
+  originCharges: [{
+    name:     String,
+    code:     String,
+    basis:    { type:String, default:'per shipment' },
+    currency: { type:String, default:'USD' },
+    amount:   Number,
+  }],
+  // Destination charges
+  destinationCharges: [{
+    name:     String,
+    code:     String,
+    basis:    { type:String, default:'per shipment' },
+    currency: { type:String, default:'USD' },
+    amount:   Number,
+  }],
+  inclusions: String,
+  remarks:    String,
+}, { timestamps:true });
+
+airRateSchema.index({ originPort:1, destinationPort:1 });
+airRateSchema.index({ isActive:1 });
+airRateSchema.index({ validFrom:1, validTo:1 });
+
+const AirRate = mongoose.model('AirRate', airRateSchema);
+
+/* ══════════════════════════════════════════════════════════════
    ADMIN
 ══════════════════════════════════════════════════════════════ */
 const adminSchema = new mongoose.Schema({
@@ -281,6 +331,12 @@ const bookingSchema = new mongoose.Schema({
   pickupAddress:   { company:String, contact:String, email:String, phone:String, street:String, city:String, country:String, postalCode:String },
   deliveryAddress: { company:String, contact:String, email:String, phone:String, street:String, city:String, country:String, postalCode:String },
   customerNotes:   String,
+  actualKg:     Number,
+lengthCm:     Number,
+widthCm:      Number,
+heightCm:     Number,
+pieces:       Number,
+chargeableKg: Number,
   adminNotes:      String,
   status:          { type:String, enum:['pending','under_review','approved','rejected','confirmed','cancelled'], default:'pending' },
   reviewedBy:      { type:mongoose.Schema.Types.ObjectId, ref:'Admin' },
@@ -367,4 +423,4 @@ activityLogSchema.index({ actor:1 });
 activityLogSchema.index({ createdAt:-1 });
 const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
 
-module.exports = { User, Admin, Rate, Port, Booking, Enquiry, SearchLog, ActivityLog };
+module.exports = { User, Admin, Rate, AirRate, Port, Booking, Enquiry, SearchLog, ActivityLog };
