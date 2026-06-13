@@ -590,15 +590,29 @@ router.get('/enquiries', async (req, res) => {
 router.patch('/enquiries/:id', async (req, res) => {
   const { status, adminResponse } = req.body;
   const enquiry = await Enquiry.findByIdAndUpdate(req.params.id, {
-    status, adminResponse, respondedBy: req.admin._id, respondedAt: new Date(),
-  }, { new: true }).populate('user', 'name email');
+    status,
+    adminResponse,
+    respondedBy: req.admin._id,
+    respondedAt: new Date(),
+  }, { new: true }).populate('user', 'name email officialEmail company');
 
   if (!enquiry) return res.status(404).json({ success: false, message: 'Enquiry not found' });
 
-  // Email user with response
-  if (adminResponse && enquiry.user?.email) {
-    await emailService.send?.({ to: enquiry.user?.officialEmail || enquiry.user?.email, subject: `Response to your enquiry ${enquiry.enquiryRef}`, html: `<p>Hi ${enquiry.user?.name || 'Customer'},</p><p>${adminResponse}</p>` }).catch(() => {});
+  // Send email to user when admin responds
+  if (adminResponse && enquiry.user) {
+    await emailService.sendEnquiryResponse(
+      enquiry.user.officialEmail || enquiry.user.email,
+      enquiry.user.name,
+      enquiry,
+      adminResponse,
+      status
+    ).catch(() => {});
   }
+
+  await ActivityLog.create({
+    actor: req.admin._id, actorModel: 'Admin',
+    action: `enquiry_${status}`, resource: 'Enquiry', resourceId: enquiry._id,
+  }).catch(() => {});
 
   res.json({ success: true, data: enquiry });
 });
