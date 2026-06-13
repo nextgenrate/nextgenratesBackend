@@ -575,6 +575,7 @@ router.patch('/bookings/:id', async (req, res) => {
     res.status(500).json({ success: false, message: err.message });  // real error now visible
   }
 });
+
 // ─── Enquiry management ───────────────────────────────────────
 router.get('/enquiries', async (req, res) => {
   const { status, page = 1, limit = 20 } = req.query;
@@ -682,25 +683,102 @@ router.get('/registrations', async (req, res) => {
 });
 
 // Approve a registration — activate the account
+// router.patch('/registrations/:userId/approve', async (req, res) => {
+//   const { adminNote } = req.body;
+//   const user = await User.findById(req.params.userId);
+//   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+//   if (user.status !== 'pending_approval') {
+//     return res.status(400).json({ success: false, message: `Cannot approve — current status is '${user.status}'` });
+//   }
+//   // Activate account only — KYC is a SEPARATE step the user must complete after login
+//   user.status = 'active';
+//   // Reset KYC to not_submitted so user is prompted to upload KYC documents after login
+//   user.kyc.status = 'not_submitted';
+//   user.kyc.submittedAt = undefined;
+//   user.kyc.reviewedAt = undefined;
+//   user.kyc.reviewedBy = undefined;
+//   await user.save();
+//   await ActivityLog.create({ actor: req.admin._id, actorModel: 'Admin', action: 'registration_approved', resource: 'User', resourceId: user._id });
+//   // Notify user — tell them to login and complete KYC
+//   await emailService.sendAccountActivated(user.officialEmail, user.name, process.env.CLIENT_URL + '/login').catch(() => {});
+//   res.json({ success: true, message: 'Registration approved — account activated. User must now upload KYC documents after login.' });
+// });
+
+// approve route — replace the status check
 router.patch('/registrations/:userId/approve', async (req, res) => {
-  const { adminNote } = req.body;
   const user = await User.findById(req.params.userId);
   if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-  if (user.status !== 'pending_approval') {
-    return res.status(400).json({ success: false, message: `Cannot approve — current status is '${user.status}'` });
+
+  // BEFORE (too strict):
+  // if (user.status !== 'pending_approval') return res.status(400).json(...)
+
+  // AFTER — allow reactivation from suspended too:
+  if (!['pending_approval', 'suspended'].includes(user.status)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: `Cannot activate — current status is '${user.status}'` 
+    });
   }
-  // Activate account only — KYC is a SEPARATE step the user must complete after login
-  user.status = 'active';
-  // Reset KYC to not_submitted so user is prompted to upload KYC documents after login
-  user.kyc.status = 'not_submitted';
-  user.kyc.submittedAt = undefined;
-  user.kyc.reviewedAt = undefined;
-  user.kyc.reviewedBy = undefined;
+
+  await User.updateOne(
+    { _id: req.params.userId },
+    { $set: { status: 'active' } }   // ← don't reset KYC on reactivation
+  );
+
+  await ActivityLog.create({ 
+    actor: req.admin._id, actorModel: 'Admin', 
+    action: user.status === 'suspended' ? 'registration_reactivated' : 'registration_approved', 
+    resource: 'User', resourceId: user._id 
+  });
+
+  const msg = user.status === 'suspended'
+    ? 'Account reactivated successfully'
+    : 'Registration approved — account activated. User must now upload KYC documents after login.';
+
+  // Only send activation email on first approval, not reactivation
+  if (user.status === 'pending_approval') {
+    await emailService.sendAccountActivated(
+      user.officialEmail, user.name, process.env.CLIENT_URL + '/login'
+    ).catch(() => {});
+  }
+
+  res.json({ success: true, message: msg });
+});
+
+// Deactivate (suspend) an active registration
+router.patch('/registrations/:userId/deactivate', async (req, res) => {
+  const { reason } = req.body;
+  const user = await User.findById(req.params.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+  if (user.status === 'suspended')
+    return res.status(400).json({ success: false, message: 'Account is already suspended' });
+
+  user.status = 'suspended';
   await user.save();
-  await ActivityLog.create({ actor: req.admin._id, actorModel: 'Admin', action: 'registration_approved', resource: 'User', resourceId: user._id });
-  // Notify user — tell them to login and complete KYC
-  await emailService.sendAccountActivated(user.officialEmail, user.name, process.env.CLIENT_URL + '/login').catch(() => {});
-  res.json({ success: true, message: 'Registration approved — account activated. User must now upload KYC documents after login.' });
+
+  await ActivityLog.create({
+    actor: req.admin._id, actorModel: 'Admin',
+    action: 'registration_deactivated', resource: 'User', resourceId: user._id,
+    meta: { reason },
+  });
+
+  await emailService.sendAccountSuspended?.(user.officialEmail, user.name, reason).catch(() => {});
+  res.json({ success: true, message: `Account suspended for ${user.name}` });
+});
+
+// Permanently delete a registration (super admin only)
+router.delete('/registrations/:userId', requireSuperAdmin, async (req, res) => {
+  const user = await User.findById(req.params.userId);
+  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+  await ActivityLog.create({
+    actor: req.admin._id, actorModel: 'Admin',
+    action: 'registration_deleted', resource: 'User', resourceId: user._id,
+    meta: { name: user.name, email: user.officialEmail || user.email },
+  });
+
+  await User.findByIdAndDelete(req.params.userId);
+  res.json({ success: true, message: `Registration for ${user.name} permanently deleted` });
 });
 
 // Reject a registration
