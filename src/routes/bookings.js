@@ -91,39 +91,41 @@ router.get('/:id', protect, async (req, res) => {
 
 // ─── Create enquiry ───────────────────────────────────────────
 router.post('/enquiries', protect, requireKyc, async (req, res) => {
-  const {
-    mode, originPort, destinationPort, containerType,
-    targetRate, currency, cargoWeight, weightUnit,
-    preferredLiner, preferredSailingDate, freeDays, charges, notes,
-  } = req.body;
+  try {
+    const {
+      mode, originPort, destinationPort, containerType,
+      targetRate, currency, cargoWeight, weightUnit,
+      preferredLiner, preferredSailingDate, freeDays, charges, notes,
+    } = req.body;
 
-  const enquiry = await Enquiry.create({
-    user: req.user._id,
-    mode, originPort, destinationPort, containerType,
-    targetRate, currency, cargoWeight, weightUnit,
-    preferredLiner,
-    preferredSailingDate: preferredSailingDate ? new Date(preferredSailingDate) : undefined,
-    freeDays, charges, notes,
-  });
+    const enquiry = await Enquiry.create({
+      user: req.user._id,
+      mode, originPort, destinationPort, containerType,
+      targetRate, currency, cargoWeight, weightUnit,
+      preferredLiner,
+      preferredSailingDate: preferredSailingDate ? new Date(preferredSailingDate) : undefined,
+      freeDays, charges, notes,
+    });
 
-  // Notify admins
-  const admins = await Admin.find({ isActive: true }).select('email').limit(3);
-  for (const admin of admins) {
-    await emailService.send?.({
-      to: admin.email,
-      subject: `New enquiry ${enquiry.enquiryRef} — ${originPort} → ${destinationPort}`,
-      html: `<p>New rate enquiry submitted by ${req.user.name}. <a href="${process.env.ADMIN_URL}/enquiries/${enquiry._id}">View in admin portal</a></p>`,
-    }).catch(() => {});
+    // Notify admins with full email alert  ← fixed
+    const admins = await Admin.find({ isActive: true, role: { $in: ['admin', 'super_admin'] } })
+      .select('email').limit(3).lean();
+    for (const admin of admins) {
+      await emailService.sendEnquiryAdminAlert(admin.email, enquiry, req.user).catch(() => {});
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Rate enquiry submitted. Our team will respond within 24 hours.',
+      enquiry: { _id: enquiry._id, enquiryRef: enquiry.enquiryRef, status: enquiry.status },
+    });
+
+  } catch (err) {
+    console.error('POST /enquiries error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
-
-  res.status(201).json({
-    success: true,
-    message: 'Rate enquiry submitted. Our team will respond within 24 hours.',
-    enquiry: { _id: enquiry._id, enquiryRef: enquiry.enquiryRef, status: enquiry.status },
-  });
 });
 
-// ─── Get user's enquiries ─────────────────────────────────────
 router.get('/enquiries', protect, async (req, res) => {
   const { status, page = 1, limit = 20 } = req.query;
   const query = { user: req.user._id };
