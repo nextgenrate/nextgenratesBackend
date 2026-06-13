@@ -525,3 +525,137 @@ emailService.sendBookingAdminAlert = async (to, booking, user) => {
     `),
   });
 };
+
+
+emailService.sendEnquiryResponse = async (to, name, enquiry, adminResponse, status) => {
+  if (!to) return;
+
+  const fmtD = d => d ? new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) : '—';
+
+  const statusConfig = {
+    responded:    { label:'Response Ready 📋', color:'#1A4FD8', bg:'#EEF3FF', border:'#BCC9E8',  msg:'Our team has reviewed your enquiry and provided a response below.' },
+    under_review: { label:'Under Review 🔍',   color:'#D97706', bg:'#FFFBEB', border:'#FDE68A',  msg:'Your enquiry is currently being reviewed by our freight team.' },
+    closed:       { label:'Enquiry Closed',    color:'#6B7280', bg:'#F9FAFB', border:'#E5E7EB',  msg:'Your enquiry has been closed. Please submit a new enquiry if you need further assistance.' },
+  };
+
+  const cfg = statusConfig[status] || statusConfig.responded;
+
+  await send({
+    to,
+    subject: `Re: Your Rate Enquiry ${enquiry.enquiryRef} — ${cfg.label}`,
+    html: `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#EEF2FA;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+<div style="max-width:620px;margin:32px auto;padding:0 16px 40px;">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#0B1D5E 0%,#1A4FD8 70%,#00C2FF 100%);border-radius:16px 16px 0 0;padding:28px 32px;text-align:center;">
+    <div style="font-size:22px;font-weight:900;color:#fff;letter-spacing:-0.3px;">NEXT GEN <span style="color:#00C2FF;">RATES</span></div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:4px;">Instant Freight Rates Re-Imagined!</div>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#ffffff;padding:32px;border-left:1px solid #DDE5F5;border-right:1px solid #DDE5F5;">
+
+    <h2 style="margin:0 0 6px;font-size:20px;font-weight:900;color:#0B1D5E;">Enquiry Update</h2>
+    <p style="margin:0 0 16px;font-size:13.5px;color:#5A6E9C;line-height:1.6;">
+      Hi <strong style="color:#0B1D5E;">${name || 'Customer'}</strong>, ${cfg.msg}
+    </p>
+
+    <!-- Status pill -->
+    <div style="margin-bottom:20px;">
+      <span style="display:inline-block;padding:6px 16px;border-radius:99px;font-size:12px;font-weight:800;background:${cfg.bg};color:${cfg.color};border:1px solid ${cfg.border};">
+        ${cfg.label}
+      </span>
+    </div>
+
+    <!-- Enquiry ref badge -->
+    <div style="background:linear-gradient(90deg,#EEF3FF,#F0F8FF);border:1.5px solid #BCC9E8;border-radius:12px;padding:14px 20px;margin-bottom:22px;text-align:center;">
+      <div style="font-size:10px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:5px;">Enquiry Reference</div>
+      <div style="font-size:20px;font-weight:900;color:#1A4FD8;font-family:ui-monospace,monospace;letter-spacing:1px;">${enquiry.enquiryRef}</div>
+    </div>
+
+    <!-- Enquiry details -->
+    <div style="margin-bottom:22px;">
+      <div style="font-size:10px;font-weight:800;color:#0B1D5E;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;padding-bottom:7px;border-bottom:2px solid #0B1D5E;">Your Enquiry Details</div>
+      <table style="width:100%;border-collapse:collapse;background:#F7F9FF;border-radius:12px;overflow:hidden;border:1px solid #DDE5F5;">
+        <tbody>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;width:45%;border-bottom:1px solid #E8EEFF;">Route</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;font-family:ui-monospace,monospace;border-bottom:1px solid #E8EEFF;">${enquiry.originPort} → ${enquiry.destinationPort}</td>
+          </tr>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #E8EEFF;">Mode</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;border-bottom:1px solid #E8EEFF;">${enquiry.mode || '—'}</td>
+          </tr>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #E8EEFF;">Container</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;border-bottom:1px solid #E8EEFF;">${enquiry.containerType || '—'}</td>
+          </tr>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #E8EEFF;">Target Rate</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;border-bottom:1px solid #E8EEFF;">${enquiry.currency || 'USD'} ${enquiry.targetRate?.toLocaleString() || '—'}</td>
+          </tr>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #E8EEFF;">Preferred Liner</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;border-bottom:1px solid #E8EEFF;">${enquiry.preferredLiner || 'Any'}</td>
+          </tr>
+          <tr>
+            <td style="padding:9px 14px;font-size:12px;font-weight:700;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.05em;">Preferred Sailing</td>
+            <td style="padding:9px 14px;font-size:13px;font-weight:700;color:#0D1535;">${fmtD(enquiry.preferredSailingDate)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    ${adminResponse ? `
+    <!-- Admin response -->
+    <div style="margin-bottom:22px;">
+      <div style="font-size:10px;font-weight:800;color:#059669;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;padding-bottom:7px;border-bottom:2px solid #059669;">Response from Our Team</div>
+      <div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:12px;padding:18px 20px;">
+        <div style="display:flex;align-items:flex-start;gap:12px;">
+          <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#059669,#0CC77B);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <span style="color:#fff;font-size:16px;">✓</span>
+          </div>
+          <div style="flex:1;">
+            <div style="font-size:11px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Next Gen Rates Team</div>
+            <div style="font-size:13.5px;color:#065F46;line-height:1.7;white-space:pre-wrap;">${adminResponse}</div>
+          </div>
+        </div>
+      </div>
+    </div>` : ''}
+
+    <!-- CTA -->
+    <div style="text-align:center;margin-bottom:26px;">
+      <a href="${process.env.CLIENT_URL || 'https://nextgenrates.com'}/rate-search"
+        style="display:inline-block;padding:13px 32px;background:linear-gradient(90deg,#1540C0,#1A6FE8 55%,#00C2FF);color:#fff;text-decoration:none;border-radius:10px;font-size:14px;font-weight:800;box-shadow:0 4px 16px rgba(0,194,255,0.28);margin-right:10px;">
+        Search Rates →
+      </a>
+    </div>
+
+    <!-- Contact block -->
+    <div style="background:#F7F9FF;border:1px solid #DDE5F5;border-radius:12px;padding:16px 20px;text-align:center;">
+      <div style="font-size:11px;font-weight:800;color:#7B8EC0;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;">Need Further Assistance?</div>
+      <table style="width:100%;border-collapse:collapse;"><tr>
+        <td style="text-align:center;padding:4px;">
+          <a href="tel:+919884055097" style="text-decoration:none;color:#0B1D5E;font-size:14px;font-weight:800;">📞 +91 98840 55097</a>
+        </td>
+        <td style="text-align:center;padding:4px;">
+          <a href="mailto:${process.env.ADMIN_EMAIL || 'support@nextgenrates.com'}" style="text-decoration:none;color:#0B1D5E;font-size:14px;font-weight:800;">✉️ ${process.env.ADMIN_EMAIL || 'support@nextgenrates.com'}</a>
+        </td>
+      </tr></table>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#0B1D5E;border-radius:0 0 16px 16px;padding:18px 32px;text-align:center;">
+    <div style="font-size:12px;color:rgba(255,255,255,0.5);line-height:1.7;">
+      © ${new Date().getFullYear()} Next Gen Rates. All rights reserved.<br>
+      This is an automated email — please do not reply directly to this message.
+    </div>
+  </div>
+
+</div>
+</body></html>`,
+  });
+};
