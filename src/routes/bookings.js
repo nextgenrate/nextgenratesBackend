@@ -11,28 +11,49 @@ const emailService = require('../services/emailService');
 // ─── Create booking request ───────────────────────────────────
 router.post('/', protect, requireKyc, async (req, res) => {
   try {
-    const {
-      rateId, mode, originPort, destinationPort, carrier, containerType,
-      containers, cargoType, commodity, hsCode, incoterms, sailingDate,
-      totalAmount, currency, pickupAddress, deliveryAddress, customerNotes,
-    } = req.body;
+    // Log what we actually receive
+    console.log('POST /bookings body keys:', Object.keys(req.body));
+    console.log('mode:', req.body.mode, 'origin:', req.body.originPort, 'dest:', req.body.destinationPort);
+
+    const mode           = req.body.mode;
+    const originPort     = req.body.originPort;
+    const destinationPort= req.body.destinationPort;
 
     if (!originPort || !destinationPort || !mode) {
-      return res.status(400).json({ success: false, message: 'originPort, destinationPort, and mode are required' });
+      return res.status(400).json({
+        success: false,
+        message: `originPort (${originPort}), destinationPort (${destinationPort}), and mode (${mode}) are required`,
+      });
     }
 
     const booking = await Booking.create({
-      user: req.user._id,
-      rate: rateId || undefined,
-      mode, originPort, destinationPort, carrier, containerType,
-      containers, cargoType, commodity, hsCode, incoterms,
-      sailingDate: sailingDate ? new Date(sailingDate) : undefined,
-      totalAmount, currency,
-      pickupAddress, deliveryAddress,
-      customerNotes,
+      user:           req.user._id,
+      rate:           req.body.rate || req.body.rateId || undefined,
+      mode,
+      originPort,
+      destinationPort,
+      carrier:        req.body.shippingLine || req.body.carrier || undefined,
+      containerType:  mode === 'AIR' ? undefined : (req.body.containerType || undefined),
+      cargoType:      req.body.cargoType     || 'FAK',
+      commodity:      req.body.commodity     || undefined,
+      hsCode:         req.body.hsCode        || undefined,
+      incoterms:      mode === 'AIR' ? undefined : (req.body.incoterms || undefined),
+      sailingDate:    req.body.sailingDate    ? new Date(req.body.sailingDate) : undefined,
+      totalAmount:    req.body.totalAmount    ? parseFloat(req.body.totalAmount) : undefined,
+      currency:       req.body.currency      || 'USD',
+      pickupAddress:  req.body.pickupAddress  || undefined,
+      deliveryAddress:req.body.deliveryAddress|| undefined,
+      customerNotes:  req.body.customerNotes  || undefined,
+      // Air-specific
+      actualKg:      req.body.actualKg      ? parseFloat(req.body.actualKg)     : undefined,
+      lengthCm:      req.body.lengthCm      ? parseFloat(req.body.lengthCm)     : undefined,
+      widthCm:       req.body.widthCm       ? parseFloat(req.body.widthCm)      : undefined,
+      heightCm:      req.body.heightCm      ? parseFloat(req.body.heightCm)     : undefined,
+      pieces:        req.body.pieces        ? parseInt(req.body.pieces)          : undefined,
+      chargeableKg:  req.body.chargeableKg  ? parseFloat(req.body.chargeableKg) : undefined,
     });
 
-    // Notify admins — fully guarded, never blocks booking creation
+    // Notify admins
     const admins = await Admin.find({ isActive: true, role: { $in: ['admin', 'super_admin'] } })
       .select('email').limit(3).lean();
     for (const admin of admins) {
@@ -40,10 +61,10 @@ router.post('/', protect, requireKyc, async (req, res) => {
     }
 
     await emailService.sendBookingConfirmation(
-  req.user?.officialEmail || req.user?.email,
-  req.user?.name,
-  booking
-).catch(() => {});
+      req.user?.officialEmail || req.user?.email,
+      req.user?.name,
+      booking
+    ).catch(() => {});
 
     await ActivityLog.create({
       actor: req.user._id, actorModel: 'User',
@@ -52,8 +73,14 @@ router.post('/', protect, requireKyc, async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Booking request submitted successfully. You will receive a confirmation within 24 hours.',
-      booking: { _id: booking._id, bookingRef: booking.bookingRef, status: booking.status },
+      message: 'Booking request submitted successfully.',
+      data: {
+        booking: {
+          _id:        booking._id,
+          bookingRef: booking.bookingRef,
+          status:     booking.status,
+        },
+      },
     });
 
   } catch (err) {
