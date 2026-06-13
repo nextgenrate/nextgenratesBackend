@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const XLSX = require('xlsx');
 const { User, Admin, Rate, Port, Booking, Enquiry, SearchLog, ActivityLog } = require('../models');
+const { AirRate } = require('../models');
+const { AirRate: AR } = require('../models');
 const { adminProtect, requireSuperAdmin, generateTokens, validate } = require('../middleware/auth');
 const emailService = require('../services/emailService');
 const { cache } = require('../config/db');
@@ -271,16 +273,52 @@ router.get('/users/:userId/searches', async (req, res) => {
 
 // ─── Rate management ──────────────────────────────────────────
 router.get('/rates', async (req, res) => {
-  const { mode, active, page = 1, limit = 20 } = req.query;
+  const { mode, active, page = 1, limit = 400 } = req.query;
+
+  // AIR rates live in a separate collection
+  if (mode === 'AIR') {
+    const query = { isActive: active === 'false' ? false : true };
+    const [rates, total] = await Promise.all([
+      AirRate.find(query).sort({ createdAt: -1 }).skip((page-1)*limit).limit(parseInt(limit)).lean(),
+      AirRate.countDocuments(query),
+    ]);
+    // Shape AirRate docs to look like Rate docs for the table
+   const shaped = rates.map(r => ({
+  _id:            r._id,
+  mode:           'AIR',
+  _airRate:       true,          // ← ADD THIS — frontend checks this flag
+  carrier:        r.carrier,     // ← was missing
+  shippingLine:   r.carrier,     // so RateCard doesn't show undefined
+  shippingLineCode: 'AIR',
+  rateType:       'SPOT RATE',
+  originPort:     r.originPort,
+  destinationPort:r.destinationPort,
+  viaPort:        [],
+  containerType:  r.cargoType,
+  cargoType:      r.cargoType,
+  freightRateUsd: r.slabs?.[0]?.ratePerKg || 0,
+  totalUsd:       r.slabs?.[0]?.minCharge  || 0,
+  sailingDate:    null,
+  transitTimeDays:null,
+  transitTime:    r.transitTime,
+  isActive:       r.isActive,
+  createdAt:      r.createdAt,
+  slabs:          r.slabs,
+  vwDivisor:      r.vwDivisor,
+  validFrom:      r.validFrom,
+}));
+    return res.json({ success:true, data:{ rates:shaped, pagination:{ total, page:parseInt(page), pages:Math.ceil(total/limit) } } });
+  }
+
+  // Sea rates (existing logic)
   const query = {};
   if (mode) query.mode = mode;
   if (active !== undefined) query.isActive = active === 'true';
-
   const [rates, total] = await Promise.all([
-    Rate.find(query).sort({ createdAt: -1 }).skip((page-1)*limit).limit(parseInt(limit)).populate('createdBy', 'name').lean(),
+    Rate.find(query).sort({ createdAt:-1 }).skip((page-1)*limit).limit(parseInt(limit)).populate('createdBy','name').lean(),
     Rate.countDocuments(query),
   ]);
-  res.json({ success: true, data: { rates, pagination: { total, page: parseInt(page), pages: Math.ceil(total/limit) } } });
+  res.json({ success:true, data:{ rates, pagination:{ total, page:parseInt(page), pages:Math.ceil(total/limit) } } });
 });
 
 router.post('/rates', async (req, res) => {
@@ -897,6 +935,141 @@ router.delete('/ports/:id', async (req, res) => {
   res.json({ success: true, message: `Port ${port.code} deactivated` });
 });
 
+
+// ─── Air Rate management ──────────────────────────────────────
+router.get('/air-rates', async (req, res) => {
+  const { page = 1, limit = 400, origin, dest } = req.query;
+  const query = {};
+  if (origin) query.originPort = origin.toUpperCase();
+  if (dest)   query.destinationPort = dest.toUpperCase();
+  const [rates, total] = await Promise.all([
+    AirRate.find(query).sort({ createdAt:-1 }).skip((page-1)*limit).limit(parseInt(limit)).lean(),
+    AirRate.countDocuments(query),
+  ]);
+  res.json({ success:true, data:{ rates, pagination:{ total, page:parseInt(page), pages:Math.ceil(total/limit) } } });
+});
+
+router.post('/air-rates', async (req, res) => {
+  const rate = await AirRate.create({ ...req.body, createdBy: req.admin._id });
+  res.status(201).json({ success:true, data:rate });
+});
+
+router.put('/air-rates/:id', async (req, res) => {
+  const rate = await AirRate.findByIdAndUpdate(req.params.id, req.body, { new:true });
+  if (!rate) return res.status(404).json({ success:false, message:'Air rate not found' });
+  res.json({ success:true, data:rate });
+});
+
+router.delete('/air-rates/:id', async (req, res) => {
+  await AirRate.findByIdAndUpdate(req.params.id, { isActive:false });
+  res.json({ success:true, message:'Air rate deactivated' });
+});
+
+// ─── Bulk upload air rates from Excel ────────────────────────
+router.post('/air-rates/bulk', uploadXlsx.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success:false, message:'No file uploaded' });
+
+  const wb   = XLSX.read(req.file.buffer, { type:'buffer', cellDates:true });
+  const ws   = wb.Sheets[wb.SheetNames[0]];
+const rows = XLSX.utils.sheet_to_json(ws, { defval:'', range: 1 });
+
+  const errors = [], created = [];
+
+  // Group rows by origin+dest+carrier+cargoType — each group = one AirRate doc with multiple slabs
+  const groups = {};
+  for (const row of rows) {
+    const key = `${row['Origin Airport']}|${row['Destination Airport']}|${row['Carrier / Airline']}|${row['Cargo Type']}`;
+    if (!groups[key]) groups[key] = { rows:[], meta: row };
+    groups[key].rows.push(row);
+  }
+
+  let rowNum = 2;
+  for (const [key, group] of Object.entries(groups)) {
+    try {
+      const meta = group.meta;
+      const orig = (meta['Origin Airport']      || '').toString().trim().toUpperCase();
+      const dest = (meta['Destination Airport'] || '').toString().trim().toUpperCase();
+      const carr = (meta['Carrier / Airline']   || 'All Airlines').toString().trim();
+      if (!orig || !dest) { errors.push({ row: rowNum, error:`Missing origin/dest for key ${key}` }); continue; }
+
+      // In the air-rates/bulk route, replace the slabs mapping with this:
+const slabs = group.rows.map(r => {
+  // Support both newline-format headers and plain headers
+  const minCW    = parseFloat(r['Min CW\n(excl.) KG'] ?? r['Min CW'] ?? r['Min CW (excl.) KG'] ?? 0);
+  const maxCW    = parseFloat(r['Max CW\n(incl.) KG'] ?? r['Max CW'] ?? r['Max CW (incl.) KG'] ?? 9999);
+  const rate     = parseFloat(r['Rate\nUSD/KG']        ?? r['Rate USD/KG']        ?? r['Rate'] ?? 0);
+  const currency = (r['Rate\nCurrency']                ?? r['Rate Currency']       ?? 'USD').toString().trim();
+  const minCharge= parseFloat(r['Min Charge\nUSD']     ?? r['Min Charge USD']     ?? r['Min Charge'] ?? 0);
+  return {
+    minCW, maxCW,
+    slabName:  (r['Slab Name'] || '').toString().trim(),
+    ratePerKg: rate,
+    currency,
+    minCharge,
+    remarks:   (r['Remarks'] || '').toString().trim(),
+  };
+}).filter(s => s.ratePerKg > 0);
+
+// Also fix the meta field reads:
+const vwDiv  = parseFloat(meta['VW Divisor\n(default 6000)'] ?? meta['VW Divisor (default 6000)'] ?? meta['VW Divisor'] ?? 6000);
+const transit = (meta['Transit Time\n(days)'] ?? meta['Transit Time (days)'] ?? meta['Transit Time'] ?? '').toString().trim();
+const validF  = meta['Valid From\n(YYYY-MM-DD)'] ?? meta['Valid From (YYYY-MM-DD)'] ?? meta['Valid From'];
+
+      if (!slabs.length) { errors.push({ row: rowNum, error:`No valid slabs for ${orig}→${dest}` }); continue; }
+
+      const rate = await AirRate.create({
+        originPort:      orig,
+        destinationPort: dest,
+        carrier:         carr,
+        cargoType:       (meta['Cargo Type'] || 'FAK').toString().trim(),
+        vwDivisor:       parseFloat(meta['VW Divisor\n(default 6000)'] || meta['VW Divisor'] || 6000),
+        transitTime:     (meta['Transit Time\n(days)'] || meta['Transit Time'] || '').toString().trim(),
+        validFrom:       parseDate(meta['Valid From\n(YYYY-MM-DD)'] || meta['Valid From']) || new Date(),
+        validTo:         parseDate(meta['Valid To']) || undefined,
+        slabs,
+        isActive: true,
+        createdBy: req.admin._id,
+      });
+      created.push(rate._id);
+    } catch(err) {
+      errors.push({ row: rowNum, error: err.message.slice(0,200) });
+    }
+    rowNum += group.rows.length;
+  }
+
+  res.json({ success:true, created:created.length, total:Object.keys(groups).length, errors });
+});
+
+// ─── Air rate template download ───────────────────────────────
+router.get('/air-rates/template', async (req, res) => {
+  // Serve the pre-built template or generate on-the-fly
+  const path = require('path');
+  const fs   = require('fs');
+  // Simple on-the-fly generation matching our upload parser column names
+  const headers = [
+    'Origin Airport','Destination Airport','Carrier / Airline','Cargo Type',
+    'Min CW\n(excl.) KG','Max CW\n(incl.) KG','Slab Name','VW Divisor\n(default 6000)',
+    'Rate\nUSD/KG','Rate\nCurrency','Transit Time\n(days)','Min Charge\nUSD',
+    'Valid From\n(YYYY-MM-DD)','Remarks',
+  ];
+  const sample = [
+    { 'Origin Airport':'DXB','Destination Airport':'MAA','Carrier / Airline':'All Airlines','Cargo Type':'FAK',
+      'Min CW\n(excl.) KG':0,'Max CW\n(incl.) KG':44,'Slab Name':'Slab 1 (+0 KG)',
+      'VW Divisor\n(default 6000)':6000,'Rate\nUSD/KG':5.5,'Rate\nCurrency':'USD',
+      'Transit Time\n(days)':'3-5','Min Charge\nUSD':250,'Valid From\n(YYYY-MM-DD)':'2026-06-01','Remarks':'Min charge applies' },
+    { 'Origin Airport':'DXB','Destination Airport':'MAA','Carrier / Airline':'All Airlines','Cargo Type':'FAK',
+      'Min CW\n(excl.) KG':44,'Max CW\n(incl.) KG':99,'Slab Name':'Slab 2 (+45 KG)',
+      'VW Divisor\n(default 6000)':6000,'Rate\nUSD/KG':4.2,'Rate\nCurrency':'USD',
+      'Transit Time\n(days)':'3-5','Min Charge\nUSD':189,'Valid From\n(YYYY-MM-DD)':'2026-06-01','Remarks':'' },
+  ];
+  const wb2 = XLSX.utils.book_new();
+  const ws2 = XLSX.utils.json_to_sheet(sample, { header: headers });
+  XLSX.utils.book_append_sheet(wb2, ws2, 'Air Rates');
+  const buf = XLSX.write(wb2, { type:'buffer', bookType:'xlsx' });
+  res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition','attachment; filename="NGR_Air_Rate_Template.xlsx"');
+  res.send(buf);
+});
 
 
 router.get('/shipping-lines', adminProtect, async (req, res) => { 
