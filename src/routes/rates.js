@@ -3,6 +3,7 @@ const router = express.Router();
 const { Rate, Port, SearchLog } = require('../models');
 const { protect, requireKyc } = require('../middleware/auth');
 const { cache } = require('../config/db');
+const { calculateAirQuote } = require('../utils/airFreight');
 
 /* ═══════════════════════════════════════════════════════════
    ALL SPECIFIC ROUTES MUST COME BEFORE  /:id
@@ -183,6 +184,85 @@ router.post('/search', protect, requireKyc, async (req, res) => {
       originPort: orig, destinationPort: dest, mode,
     },
   });
+});
+
+// GET /api/rates/air/search
+router.post('/air/search', protect, requireKyc, async (req, res) => {
+  try {
+    const {
+      originPort, destinationPort,
+      actualKg = 0, lengthCm = 0, widthCm = 0, heightCm = 0, pieces = 1,
+      page = 1, limit = 20,
+    } = req.body;
+
+    if (!originPort || !destinationPort) {
+      return res.status(400).json({ success: false, message: 'originPort and destinationPort required' });
+    }
+
+    // ── Calculate cargo weights ──────────────────────────────
+    const divisor  = 6000;
+    const vwPerPiece = (parseFloat(lengthCm) * parseFloat(widthCm) * parseFloat(heightCm)) / divisor;
+    const totalVW    = Math.round(vwPerPiece * parseInt(pieces) * 100) / 100;
+    const totalAW    = Math.round(parseFloat(actualKg) * parseInt(pieces) * 100) / 100;
+    const cw         = Math.max(totalVW, totalAW);
+
+    // Build cargo object — field names must match what frontend uses
+    const cargo = { totalAW, totalVW, cw, divisor };
+
+    // ── Find matching air rates ──────────────────────────────
+    const { AirRate } = require('../models');
+    const { calculateAirQuote } = require('../utils/airFreight');
+
+    const airRates = await AirRate.find({
+      originPort:      originPort.toUpperCase(),
+      destinationPort: destinationPort.toUpperCase(),
+      isActive: true,
+    }).lean();
+
+    const results = airRates.map(r => {
+      const quote = calculateAirQuote(r, { actualKg: totalAW / parseInt(pieces), lengthCm, widthCm, heightCm, pieces });
+      return {
+        _id:            r._id,
+        _airRate:       true,
+        carrier:        r.carrier,
+        shippingLine:   r.carrier,
+        originPort:     r.originPort,
+        destinationPort:r.destinationPort,
+        cargoType:      r.cargoType,
+        vwDivisor:      r.vwDivisor || divisor,
+        transitTime:    r.transitTime,
+        validFrom:      r.validFrom,
+        validTo:        r.validTo,
+        slabs:          r.slabs,
+        mode:           'AIR',
+        quote,
+      };
+    }).filter(r => r.quote?.slab); // only return rates where a slab matched
+
+    // Sort by freight cost ascending
+    results.sort((a, b) => (a.quote?.freightCost || 0) - (b.quote?.freightCost || 0));
+
+    const total = results.length;
+    const paginated = results.slice((page - 1) * limit, page * limit);
+
+    res.json({
+      success: true,
+      data: {
+        rates:      paginated,
+        cargo,                    // ← this is what the frontend reads
+        pagination: {
+          total,
+          page:  parseInt(page),
+          pages: Math.ceil(total / limit),
+          limit: parseInt(limit),
+        },
+      },
+    });
+
+  } catch (err) {
+    console.error('POST /rates/air/search error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // ─── Send rate by email ───────────────────────────────────────
