@@ -105,17 +105,6 @@ router.get('/', protect, async (req, res) => {
   res.json({ success: true, data: { bookings, pagination: { total, page: parseInt(page), pages: Math.ceil(total / limit) } } });
 });
 
-// ─── Get single booking ───────────────────────────────────────
-router.get('/:id', protect, async (req, res) => {
-  const booking = await Booking.findOne({ _id: req.params.id, user: req.user._id }).lean();
-  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
-  res.json({ success: true, data: booking });
-});
-
-// ═══════════════════════════════════════════════════════
-//  ENQUIRIES (custom rate requests / match rate)
-// ═══════════════════════════════════════════════════════
-
 // ─── Create enquiry ───────────────────────────────────────────
 router.post('/enquiries', protect, requireKyc, async (req, res) => {
   try {
@@ -165,5 +154,18 @@ router.get('/enquiries', protect, async (req, res) => {
 
   res.json({ success: true, data: { enquiries, pagination: { total, page: parseInt(page), pages: Math.ceil(total / limit) } } });
 });
+
+// ─── Get single booking ───────────────────────────────────────
+router.get('/:id', protect, async (req, res) => {
+  const booking = await Booking.findOne({ _id: req.params.id, user: req.user._id }).lean();
+  if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+  res.json({ success: true, data: booking });
+});
+
+// ═══════════════════════════════════════════════════════
+//  ENQUIRIES (custom rate requests / match rate)
+// ═══════════════════════════════════════════════════════
+
+
 
 module.exports = router;
