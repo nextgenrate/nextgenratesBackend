@@ -451,6 +451,29 @@ router.get('/rates/bulk-template', async (req, res) => {
   res.send(buf);
 });
 
+// routes/admin.js — add this near the ports section
+router.get('/ports/search', async (req, res) => {
+  const { q = '', type = 'sea', limit = 30 } = req.query;
+  const lim = Math.min(parseInt(limit) || 30, 200);
+
+  const query = { type, isActive: true };
+  if (q.trim()) {
+    query.$or = [
+      { name:    new RegExp(q, 'i') },
+      { code:    new RegExp(q, 'i') },
+      { country: new RegExp(q, 'i') },
+    ];
+  }
+
+  const ports = await Port.find(query)
+    .select('code name country countryCode region type')
+    .sort({ name: 1 })
+    .limit(lim)
+    .lean();
+
+  res.json({ success: true, data: ports });
+});
+
 /* ── Bulk upload — flat row format ── */
 router.post('/rates/bulk', uploadXlsx.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
