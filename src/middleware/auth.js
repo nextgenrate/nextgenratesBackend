@@ -38,6 +38,37 @@ const protect = async (req, res, next) => {
   }
 };
 
+const protectAny = async (req, res, next) => {
+  try {
+    const auth = req.headers.authorization;
+    if (!auth?.startsWith('Bearer ')) 
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const token = auth.split(' ')[1];
+
+    const blacklisted = await cache.get(`blacklist:${token}`);
+    if (blacklisted) 
+      return res.status(401).json({ success: false, message: 'Token revoked' });
+
+    // Try user token first, then admin token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id).select('-password -otp');
+      if (user) { req.user = user; req.token = token; return next(); }
+    } catch (_) {}
+
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET + '_admin');
+      const admin = await Admin.findById(decoded.id).select('-password');
+      if (admin?.isActive) { req.admin = admin; req.user = admin; req.token = token; return next(); }
+    } catch (_) {}
+
+    return res.status(401).json({ success: false, message: 'Invalid token' });
+  } catch (err) {
+    return res.status(401).json({ success: false, message: 'Invalid token' });
+  }
+};
+
 // Require KYC to be approved
 const requireKyc = (req, res, next) => {
   if (req.user.kyc?.status !== 'approved') {
@@ -84,4 +115,4 @@ const validate = (schema) => (req, res, next) => {
   next();
 };
 
-module.exports = { protect, requireKyc, adminProtect, requireSuperAdmin, validate, generateTokens, generateOtp };
+module.exports = { protect, requireKyc, adminProtect, requireSuperAdmin, validate, generateTokens, generateOtp,protectAny };
