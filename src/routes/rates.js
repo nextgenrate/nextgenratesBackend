@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { Rate, Port, SearchLog } = require('../models');
-const { protect, requireKyc } = require('../middleware/auth');
+const { protect, requireKyc,protectAny } = require('../middleware/auth');
 const { cache } = require('../config/db');
 const { calculateAirQuote } = require('../utils/airFreight');
 
@@ -14,7 +14,7 @@ const { calculateAirQuote } = require('../utils/airFreight');
 // ─── Port autocomplete ────────────────────────────────────────
 // GET /api/rates/ports/search?q=&type=sea|air&limit=10
 // When q is empty, returns up to `limit` ports (for initial dropdown)
-router.get('/ports/search', protect, async (req, res) => {
+router.get('/ports/search', protectAny, async (req, res) => {
   const { q = '', type = 'sea', limit = 15 } = req.query;
   const lim = Math.min(parseInt(limit) || 15, 30);
 
